@@ -1,0 +1,5 @@
+com\senyalert\Main.class
+com\senyalert\DashboardFrame.class
+com\senyalert\DistressEvent.class
+com\senyalert\SenyAlertServer.class
+com\senyalert\DatabaseManager.class
