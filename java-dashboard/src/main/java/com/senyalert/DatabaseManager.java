@@ -81,4 +81,29 @@ public class DatabaseManager {
             }
         });
     }
+
+    public static void loadHistoricalIncidents(javax.swing.table.DefaultTableModel tableModel) {
+        dbWorker.submit(() -> {
+            String sql = "SELECT incident_id, camera_id, triage_level, confidence, status, detection_timestamp FROM incident_logs ORDER BY incident_id DESC;";
+            try (Connection conn = DriverManager.getConnection(DB_URL);
+                 Statement stmt = conn.createStatement();
+                 ResultSet rs = stmt.executeQuery(sql)) {
+                
+                while (rs.next()) {
+                    Object[] row = {
+                        rs.getInt("incident_id"),
+                        rs.getString("camera_id"),
+                        rs.getString("triage_level"),
+                        String.format("%.2f", rs.getDouble("confidence")),
+                        rs.getString("status"),
+                        rs.getString("detection_timestamp")
+                    };
+                    // Marshal back to EDT
+                    javax.swing.SwingUtilities.invokeLater(() -> tableModel.addRow(row));
+                }
+            } catch (SQLException e) {
+                e.printStackTrace();
+            }
+        });
+    }
 }

@@ -41,12 +41,11 @@ public class DashboardFrame extends JFrame {
         JPanel centerPanel = new JPanel(new GridLayout(1, 2, 12, 12));
         centerPanel.setBorder(BorderFactory.createEmptyBorder(10, 15, 10, 15));
 
-        // Left Panel: Feed Lock & Card
         cameraTile = new JPanel(new BorderLayout());
         cameraTile.setBackground(new Color(40, 44, 52));
         cameraTile.setBorder(BorderFactory.createLineBorder(new Color(70, 75, 85), 2));
 
-        cameraCardLabel = new JLabel("<html><center>CAMERA FEED TILE<br>Awaiting Incident Trigger...</center></html>", SwingConstants.CENTER);
+        cameraCardLabel = new JLabel("<html><center>CAMERA FEED TILE<br>Awaiting Incident Trigger or Selection...</center></html>", SwingConstants.CENTER);
         cameraCardLabel.setFont(new Font("Segoe UI", Font.PLAIN, 15));
         cameraCardLabel.setForeground(Color.LIGHT_GRAY);
         cameraTile.add(cameraCardLabel, BorderLayout.CENTER);
@@ -58,12 +57,31 @@ public class DashboardFrame extends JFrame {
         auditTable = new JTable(tableModel);
         auditTable.setRowHeight(24);
         auditTable.getTableHeader().setFont(new Font("Segoe UI", Font.BOLD, 12));
+        
+        // Incident Selection Listener for DVR Rollback feature
+        auditTable.getSelectionModel().addListSelectionListener(event -> {
+            if (!event.getValueIsAdjusting() && auditTable.getSelectedRow() != -1) {
+                int row = auditTable.getSelectedRow();
+                String id = auditTable.getValueAt(row, 0).toString();
+                String cam = auditTable.getValueAt(row, 1).toString();
+                String time = auditTable.getValueAt(row, 5).toString();
+                
+                cameraCardLabel.setText(String.format(
+                    "<html><center><b style='color:#3498DB;'>INCIDENT SELECTED FOR REVIEW</b><br><br>" +
+                    "Incident ID: #%s<br>" +
+                    "Camera: %s<br>" +
+                    "<b style='color:#F1C40F;'>Rollback Timestamp: %s</b><br><br>" +
+                    "<i>Use this timestamp to retrieve DVR footage.</i></center></html>",
+                    id, cam, time
+                ));
+            }
+        });
+        
         JScrollPane scrollPane = new JScrollPane(auditTable);
         centerPanel.add(scrollPane);
-
         add(centerPanel, BorderLayout.CENTER);
 
-        // Bottom Controls: Simulation fallback & Resolve buttons
+        // Bottom Controls
         JPanel footerPanel = new JPanel(new FlowLayout(FlowLayout.RIGHT, 10, 10));
         
         JButton testTriggerBtn = new JButton("Simulate Fallback Distress");
@@ -83,6 +101,9 @@ public class DashboardFrame extends JFrame {
         footerPanel.add(testTriggerBtn);
         footerPanel.add(resolveBtn);
         add(footerPanel, BorderLayout.SOUTH);
+
+        // Load saved incidents from SQLite on startup
+        DatabaseManager.loadHistoricalIncidents(tableModel);
     }
 
     public void handleDistressEvent(DistressEvent event) {
