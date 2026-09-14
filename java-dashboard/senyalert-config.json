@@ -1,5 +1,5 @@
 {
-    "post_event_sec": 8,
+    "post_event_sec": 12,
     "fingers": {
         "middle": true,
         "thumb": true,
@@ -7,6 +7,6 @@
         "pinky": true,
         "index": true
     },
-    "confidence_threshold": 0.8,
-    "pre_event_sec": 8
+    "confidence_threshold": 0.79,
+    "pre_event_sec": 12
 }

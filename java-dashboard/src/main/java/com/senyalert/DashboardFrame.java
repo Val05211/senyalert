@@ -6,16 +6,10 @@ import java.awt.*;
 import java.io.File;
 import java.nio.file.Files;
 import java.nio.file.Paths;
+import java.nio.file.StandardCopyOption;
 import java.text.SimpleDateFormat;
 import java.util.Date;
 import org.json.JSONObject;
-import javafx.application.Platform;
-import javafx.embed.swing.JFXPanel;
-import javafx.scene.Scene;
-import javafx.scene.layout.BorderPane;
-import javafx.scene.media.Media;
-import javafx.scene.media.MediaPlayer;
-import javafx.scene.media.MediaView;
 
 public class DashboardFrame extends JFrame {
     private final DefaultTableModel tableModel;
@@ -25,10 +19,7 @@ public class DashboardFrame extends JFrame {
     private final JPanel cameraTile;
     private int lastIncidentId = -1;
     private SenyAlertServer serverRef;
-
-    // Media Player Components
-    private JFXPanel jfxPanel;
-    private MediaPlayer mediaPlayer;
+    private boolean isEnginePaused = false;
 
     public void setServerReference(SenyAlertServer server) {
         this.serverRef = server;
@@ -36,7 +27,7 @@ public class DashboardFrame extends JFrame {
 
     public DashboardFrame() {
         setTitle("SenyAlert - Silent Distress Dispatch & Triage System");
-        setExtendedState(JFrame.MAXIMIZED_BOTH); // Fullscreen requirement
+        setExtendedState(JFrame.MAXIMIZED_BOTH); 
         setUndecorated(true);
         setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
         setLayout(new BorderLayout());
@@ -44,7 +35,6 @@ public class DashboardFrame extends JFrame {
         JTabbedPane mainTabs = new JTabbedPane();
         mainTabs.setFont(new Font("Segoe UI", Font.BOLD, 14));
 
-        // Initialization for Live Dispatch Panel
         String[] columns = {"ID", "Camera", "Triage Tier", "Confidence", "Status", "Time", "Video Path"};
         tableModel = new DefaultTableModel(columns, 0);
         auditTable = new JTable(tableModel);
@@ -54,18 +44,16 @@ public class DashboardFrame extends JFrame {
         cameraCardLabel = new JLabel("<html><center>CAMERA FEED TILE<br>Awaiting Incident...</center></html>", SwingConstants.CENTER);
         
         mainTabs.addTab("Live Dispatch", buildDashboardPanel());
-        mainTabs.addTab("Database & Video Viewer", buildDatabasePanel());
         mainTabs.addTab("Engine Settings", buildSettingsPanel());
+        mainTabs.addTab("Database & Video Viewer", buildDatabasePanel());
         
         add(mainTabs, BorderLayout.CENTER);
-        DatabaseManager.loadHistoricalIncidents(tableModel); // Requires updated DatabaseManager
+        DatabaseManager.loadHistoricalIncidents(tableModel); 
     }
 
-    // Fixed compilation error: Added 'JPanel' return type
     private JPanel buildDashboardPanel() {
         JPanel dispatchPanel = new JPanel(new BorderLayout());
         
-        // Header
         JPanel headerPanel = new JPanel(new BorderLayout());
         headerPanel.setBackground(new Color(25, 35, 45));
         headerPanel.setBorder(BorderFactory.createEmptyBorder(12, 15, 12, 15));
@@ -80,7 +68,6 @@ public class DashboardFrame extends JFrame {
         headerPanel.add(statusBanner, BorderLayout.EAST);
         dispatchPanel.add(headerPanel, BorderLayout.NORTH);
 
-        // Center Content
         JPanel centerPanel = new JPanel(new GridLayout(1, 2, 12, 12));
         centerPanel.setBorder(BorderFactory.createEmptyBorder(10, 15, 10, 15));
 
@@ -97,16 +84,34 @@ public class DashboardFrame extends JFrame {
         centerPanel.add(scrollPane);
         dispatchPanel.add(centerPanel, BorderLayout.CENTER);
 
-        // Footer
+        // Control Footer with Engine Controls
         JPanel footerPanel = new JPanel(new FlowLayout(FlowLayout.RIGHT, 10, 10));
-        JButton resolveBtn = new JButton("Acknowledge & Resolve Incident");
+        
+        JButton reloadBtn = new JButton("Reload Engine Config");
+        reloadBtn.addActionListener(e -> triggerEngineReload());
+        
+        JButton pauseBtn = new JButton("Pause Engine");
+        pauseBtn.addActionListener(e -> {
+            if (serverRef != null) {
+                isEnginePaused = !isEnginePaused;
+                JSONObject payload = new JSONObject();
+                payload.put("action", "PAUSE");
+                payload.put("state", isEnginePaused);
+                serverRef.broadcast(payload.toString());
+                pauseBtn.setText(isEnginePaused ? "Resume Engine" : "Pause Engine");
+            }
+        });
+
+        JButton resolveBtn = new JButton("Acknowledge & Resolve");
         resolveBtn.setBackground(new Color(52, 152, 219));
         resolveBtn.setForeground(Color.WHITE);
         resolveBtn.addActionListener(e -> resolveActiveIncident());
 
-        JButton exitBtn = new JButton("Exit Fullscreen");
+        JButton exitBtn = new JButton("Exit System");
         exitBtn.addActionListener(e -> System.exit(0));
 
+        footerPanel.add(reloadBtn);
+        footerPanel.add(pauseBtn);
         footerPanel.add(resolveBtn);
         footerPanel.add(exitBtn);
         dispatchPanel.add(footerPanel, BorderLayout.SOUTH);
@@ -118,30 +123,46 @@ public class DashboardFrame extends JFrame {
         JPanel dbPanel = new JPanel(new BorderLayout(10, 10));
         dbPanel.setBorder(BorderFactory.createEmptyBorder(10, 10, 10, 10));
 
-        // CRUD Table (Shares model with Live Dispatch for synchronization)
         JTable crudTable = new JTable(tableModel);
-        dbPanel.add(new JScrollPane(crudTable), BorderLayout.WEST);
+        dbPanel.add(new JScrollPane(crudTable), BorderLayout.CENTER);
 
-        // JavaFX Embedded Media Player
-        jfxPanel = new JFXPanel();
-        jfxPanel.setPreferredSize(new Dimension(640, 360));
-        jfxPanel.setBorder(BorderFactory.createTitledBorder("Incident Video Evidence"));
-        dbPanel.add(jfxPanel, BorderLayout.CENTER);
-
-        // Event Selection Listener to load MP4
-        crudTable.getSelectionModel().addListSelectionListener(e -> {
-            if (!e.getValueIsAdjusting() && crudTable.getSelectedRow() != -1) {
-                int row = crudTable.getSelectedRow();
-                String videoPath = (String) tableModel.getValueAt(row, 6);
-                if (videoPath != null && !videoPath.isEmpty()) {
-                    loadVideo(videoPath);
-                }
+        JPanel controlPanel = new JPanel(new FlowLayout(FlowLayout.LEFT));
+        
+        JButton playBtn = new JButton("Play Native Video");
+        playBtn.addActionListener(e -> {
+            int row = crudTable.getSelectedRow();
+            if (row != -1) {
+                String path = (String) tableModel.getValueAt(row, 6);
+                try {
+                    File videoFile = new File(path);
+                    if (videoFile.exists()) {
+                        Desktop.getDesktop().open(videoFile);
+                    } else {
+                        JOptionPane.showMessageDialog(this, "Video file not found at: " + path, "Playback Error", JOptionPane.ERROR_MESSAGE);
+                    }
+                } catch (Exception ex) { ex.printStackTrace(); }
             }
         });
 
-        // CRUD Controls
-        JPanel controlPanel = new JPanel(new FlowLayout(FlowLayout.LEFT));
-        JButton deleteBtn = new JButton("Delete Selected Incident");
+        JButton exportBtn = new JButton("Export Selected MP4");
+        exportBtn.addActionListener(e -> {
+             int row = crudTable.getSelectedRow();
+             if(row != -1) {
+                 String sourcePath = (String) tableModel.getValueAt(row, 6);
+                 JFileChooser fileChooser = new JFileChooser();
+                 fileChooser.setSelectedFile(new File("Exported_Incident.mp4"));
+                 if(fileChooser.showSaveDialog(this) == JFileChooser.APPROVE_OPTION) {
+                     try {
+                         Files.copy(Paths.get(sourcePath), fileChooser.getSelectedFile().toPath(), StandardCopyOption.REPLACE_EXISTING);
+                         JOptionPane.showMessageDialog(this, "Exported successfully!");
+                     } catch (Exception ex) { 
+                         JOptionPane.showMessageDialog(this, "Export Failed: " + ex.getMessage(), "Error", JOptionPane.ERROR_MESSAGE);
+                     }
+                 }
+             }
+        });
+        
+        JButton deleteBtn = new JButton("Delete Record");
         deleteBtn.addActionListener(e -> {
             int row = crudTable.getSelectedRow();
             if (row != -1) {
@@ -150,47 +171,13 @@ public class DashboardFrame extends JFrame {
                 tableModel.removeRow(row);
             }
         });
-        
-        JButton exportBtn = new JButton("Export Selected MP4");
-        exportBtn.addActionListener(e -> {
-             int row = crudTable.getSelectedRow();
-             if(row != -1) {
-                 String sourcePath = (String) tableModel.getValueAt(row, 6);
-                 JFileChooser fileChooser = new JFileChooser();
-                 if(fileChooser.showSaveDialog(this) == JFileChooser.APPROVE_OPTION) {
-                     try {
-                         Files.copy(Paths.get(sourcePath), fileChooser.getSelectedFile().toPath());
-                         JOptionPane.showMessageDialog(this, "Exported successfully!");
-                     } catch (Exception ex) { ex.printStackTrace(); }
-                 }
-             }
-        });
 
-        controlPanel.add(deleteBtn);
+        controlPanel.add(playBtn);
         controlPanel.add(exportBtn);
+        controlPanel.add(deleteBtn);
         dbPanel.add(controlPanel, BorderLayout.SOUTH);
 
         return dbPanel;
-    }
-
-    private void loadVideo(String filePath) {
-        File videoFile = new File(filePath);
-        if (!videoFile.exists()) return;
-
-        Platform.runLater(() -> {
-            if (mediaPlayer != null) mediaPlayer.dispose();
-            Media media = new Media(videoFile.toURI().toString());
-            mediaPlayer = new MediaPlayer(media);
-            MediaView mediaView = new MediaView(mediaPlayer);
-            
-            BorderPane pane = new BorderPane();
-            pane.setCenter(mediaView);
-            mediaView.fitWidthProperty().bind(pane.widthProperty());
-            
-            jfxPanel.setScene(new Scene(pane));
-            mediaPlayer.setCycleCount(MediaPlayer.INDEFINITE);
-            mediaPlayer.play();
-        });
     }
 
     private JPanel buildSettingsPanel() {
@@ -203,14 +190,13 @@ public class DashboardFrame extends JFrame {
         confidenceSlider.setPaintTicks(true);
         confidenceSlider.setPaintLabels(true);
 
-        // Simulating the 2-handle timeline with two distinct sliders around a visual center
         JSlider preEventSlider = new JSlider(1, 15, 5); 
         JSlider postEventSlider = new JSlider(1, 15, 5);
 
         JCheckBox reqThumb = new JCheckBox("Require Tucked Thumb", true);
         JCheckBox reqIndex = new JCheckBox("Require Folded Index", true);
 
-        JButton saveBtn = new JButton("Save Config & Reload Engine");
+        JButton saveBtn = new JButton("Save Configuration");
         saveBtn.addActionListener(e -> {
             JSONObject config = new JSONObject();
             config.put("confidence_threshold", confidenceSlider.getValue() / 100.0);
@@ -227,25 +213,8 @@ public class DashboardFrame extends JFrame {
 
             try (java.io.FileWriter file = new java.io.FileWriter("senyalert-config.json")) {
                 file.write(config.toString(4));
-                JOptionPane.showMessageDialog(this, "Configuration Saved and Engine Reloaded.");
+                triggerEngineReload();
             } catch (Exception ex) { ex.printStackTrace(); }
-
-            if (serverRef != null) {
-                JSONObject payload = new JSONObject();
-                payload.put("action", "UPDATE_SETTINGS");
-                payload.put("config", config);
-                serverRef.broadcast(payload.toString());
-            }
-        });
-        
-        JButton enginePauseBtn = new JButton("Pause Engine Detection");
-        enginePauseBtn.addActionListener(e -> {
-            if (serverRef != null) {
-                JSONObject payload = new JSONObject();
-                payload.put("action", "PAUSE");
-                payload.put("state", true);
-                serverRef.broadcast(payload.toString());
-            }
         });
 
         settings.add(new JLabel("Target Confidence (%):")); settings.add(confidenceSlider);
@@ -253,11 +222,24 @@ public class DashboardFrame extends JFrame {
         settings.add(new JLabel("")); settings.add(reqIndex);
         settings.add(new JLabel("Pre-Event Record Buffer (Sec):")); settings.add(preEventSlider);
         settings.add(new JLabel("Post-Event Record Buffer (Sec):")); settings.add(postEventSlider);
-        settings.add(new JLabel("Engine Controls:")); settings.add(enginePauseBtn);
         settings.add(new JLabel("")); settings.add(saveBtn);
 
         wrapper.add(settings, BorderLayout.NORTH);
         return wrapper;
+    }
+    
+    private void triggerEngineReload() {
+        if (serverRef != null) {
+            try {
+                String content = new String(Files.readAllBytes(Paths.get("senyalert-config.json")));
+                JSONObject payload = new JSONObject();
+                payload.put("action", "UPDATE_SETTINGS");
+                payload.put("config", new JSONObject(content));
+                serverRef.broadcast(payload.toString());
+            } catch (Exception ex) {
+                JOptionPane.showMessageDialog(this, "Save a configuration first.", "Notice", JOptionPane.WARNING_MESSAGE);
+            }
+        }
     }
 
     public void handleDistressEvent(DistressEvent event, String videoPath) {

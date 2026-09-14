@@ -10,7 +10,7 @@ import websocket
 import math
 import os
 
-# Default Configurations (Overridden by Java Settings Panel)
+# Default Configurations 
 CONFIG = {
     "confidence_threshold": 0.70,
     "fingers": {"thumb": True, "index": True, "middle": True, "ring": True, "pinky": True},
@@ -23,7 +23,6 @@ CONFIG = {
 WS_URL = "ws://localhost:8080"
 FPS_TARGET = 10 
 
-# Ring buffer for Pre-Event recording
 frame_buffer = collections.deque(maxlen=CONFIG["pre_event_sec"] * FPS_TARGET)
 is_recording_event = False
 post_event_frames_left = 0
@@ -41,25 +40,27 @@ options = vision.HandLandmarkerOptions(
 detector = vision.HandLandmarker.create_from_options(options)
 
 def on_message(ws, message):
-    """Receives JSON configuration commands from the Java Dashboard."""
     global CONFIG, frame_buffer
     try:
         data = json.loads(message)
         if data.get("action") == "UPDATE_SETTINGS":
             CONFIG.update(data["config"])
             frame_buffer = collections.deque(frame_buffer, maxlen=CONFIG["pre_event_sec"] * FPS_TARGET)
-            print("[ENGINE] Settings reloaded from dashboard.")
+            # Push confirmation back to Java
+            ws.send(json.dumps({"event": "CONFIG_ACK", "status": "Engine configuration successfully reloaded."}))
         elif data.get("action") == "PAUSE":
             CONFIG["paused"] = data["state"]
+            state_str = "PAUSED" if data["state"] else "RESUMED"
+            ws.send(json.dumps({"event": "CONFIG_ACK", "status": f"Engine detection is now {state_str}."}))
     except Exception as e:
-        print(f"[ENGINE ERROR] Failed to parse dashboard command: {e}")
+        print(f"[ENGINE ERROR] {e}")
 
 def start_websocket_listener():
     global ws_app
     ws_app = websocket.WebSocketApp(WS_URL, on_message=on_message)
     while True:
         ws_app.run_forever()
-        time.sleep(3) # Reconnect loop
+        time.sleep(3) 
 
 def send_alert(confidence_score, video_filename):
     payload = {
@@ -77,7 +78,6 @@ def send_alert(confidence_score, video_filename):
 def process_frame(frame, cached_landmarks):
     global is_recording_event, post_event_frames_left, current_video_writer, current_event_id
 
-    # 1. Manage Ring Buffer & Recording
     frame_buffer.append(frame.copy())
     
     if is_recording_event:
@@ -94,11 +94,9 @@ def process_frame(frame, cached_landmarks):
     lm = cached_landmarks
     score = 0.0
     
-    # Orientation check: Wrist (0) must be lower than Middle MCP (9)[cite: 3]
     is_upright = lm[0].y > lm[9].y
     
     if is_upright:
-        # Dynamic Thumb Check using hypotenuse for leniency[cite: 3]
         if CONFIG["fingers"].get("thumb", True):
             thumb_to_pinky_base = math.hypot(lm[4].x - lm[17].x, lm[4].y - lm[17].y)
             if thumb_to_pinky_base < 0.15:
@@ -106,7 +104,6 @@ def process_frame(frame, cached_landmarks):
         else:
             score += 0.30 
 
-        # Dynamic Finger Checks: Tip must fall below PIP joint[cite: 3]
         finger_map = {"index": (8,6), "middle": (12,10), "ring": (16,14), "pinky": (20,18)}
         for finger, (tip, pip) in finger_map.items():
             if CONFIG["fingers"].get(finger, True):
@@ -115,7 +112,7 @@ def process_frame(frame, cached_landmarks):
             else:
                 score += 0.175 
 
-    # Render Visual Feedback Dots[cite: 3]
+    # Restore Visual Feedback Dots
     color = (0, 255, 0) if score >= CONFIG["confidence_threshold"] else (0, 165, 255)
     h, w, _ = frame.shape
     for pt in cached_landmarks:
@@ -125,7 +122,6 @@ def process_frame(frame, cached_landmarks):
     cv2.putText(frame, f"Confidence: {score*100:.1f}%", (20, 30), 
                 cv2.FONT_HERSHEY_SIMPLEX, 0.7, color, 2)
 
-    # 2. Trigger Event & Start Video Dump
     current_time = time.time()
     if score >= CONFIG["confidence_threshold"]:
         cv2.putText(frame, "DISTRESS THRESHOLD MET", (20, 60), 
@@ -136,13 +132,12 @@ def process_frame(frame, cached_landmarks):
             post_event_frames_left = CONFIG["post_event_sec"] * FPS_TARGET
             current_event_id = f"incident_{int(current_time)}"
             
-            # Resolve Absolute Path to eliminate Java file searching errors
+            # Resolve Absolute Path for Java execution
             video_filepath = os.path.abspath(f"{current_event_id}.mp4")
             
             fourcc = cv2.VideoWriter_fourcc(*'mp4v')
             current_video_writer = cv2.VideoWriter(video_filepath, fourcc, FPS_TARGET, CONFIG["resolution"])
             
-            # Dump pre-event buffer into the file immediately
             for buf_frame in frame_buffer:
                 current_video_writer.write(buf_frame)
 
@@ -150,7 +145,6 @@ def process_frame(frame, cached_landmarks):
 
     return score
 
-# Start WS background thread
 threading.Thread(target=start_websocket_listener, daemon=True).start()
 
 cap = cv2.VideoCapture(0)
