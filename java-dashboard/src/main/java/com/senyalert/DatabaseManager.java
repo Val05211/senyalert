@@ -106,17 +106,4 @@ public class DatabaseManager {
             }
         });
     }
-
-    public static void deleteIncidentAsync(int incidentId) {
-        dbWorker.submit(() -> {
-            String sql = "DELETE FROM incident_logs WHERE incident_id = ?;";
-            try (Connection conn = DriverManager.getConnection(DB_URL);
-                 PreparedStatement pstmt = conn.prepareStatement(sql)) {
-                pstmt.setInt(1, incidentId);
-                pstmt.executeUpdate();
-            } catch (SQLException e) {
-                e.printStackTrace();
-            }
-        });
-    }
 }
